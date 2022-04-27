@@ -11,10 +11,13 @@ const Chat = () => {
   };
   return (
     <div className="canvas">
-      <div className="map">
-        <Map getJoints = {getJoints}/>
-      </div>
-      <CameraView className = "float" mapJoints={mapJoints} />
+
+      <span className="map">
+        <Map getJoints={getJoints} />
+      </span>
+      <span>
+        <CameraView className="float" mapJoints={mapJoints} />
+      </span>
     </div>
   );
 };

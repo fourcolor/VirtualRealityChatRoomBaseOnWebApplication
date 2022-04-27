@@ -1,6 +1,9 @@
 import React, { useRef, useState } from "react";
 import * as tf from "@tensorflow/tfjs";
-import {Holistic} from "@mediapipe/holistic";
+import * as poseDetection from "@tensorflow-models/pose-detection";
+import * as faceLandmarksDetection from "@tensorflow-models/face-landmarks-detection";
+import * as handPoseDetection from "@tensorflow-models/hand-pose-detection";
+import * as Kalidokit from "kalidokit";
 import Webcam from "react-webcam";
 import "../index.css";
 
@@ -15,25 +18,33 @@ const CameraView = (props) => {
     right: 0,
     textAlign: "center",
     zIndex: 9,
-    width: 320,
-    height: 240,
+    width: 640,
+    height: 480,
   };
 
   const runPosenet = async () => {
-    const holistic = new Holistic({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1635989137/${file}`;
-      },
-    });
-    holistic.setOptions({
-      modelComplexity: 1,
-      smoothLandmarks: true,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7,
-      refineFaceLandmarks: true,
-    });
+    const faceModel = await faceLandmarksDetection.load(
+      faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+    );
+    const model = poseDetection.SupportedModels.BlazePose;
+    const detectorConfig = {
+      runtime: "tfjs", // 或者 'tfjs'
+      modelType: "full",
+    };
+    const handmodel = handPoseDetection.SupportedModels.MediaPipeHands;
+    const handdetectorConfig = {
+      runtime: "tfjs", // or 'tfjs',
+      solutionPath: "https://cdn.jsdelivr.net/npm/@mediapipe/hands",
+      modelType: "full",
+    };
+    const handModel = await handPoseDetection.createDetector(
+      handmodel,
+      handdetectorConfig
+    );
+    const net = await poseDetection.createDetector(model, detectorConfig);
+    console.log("Posenet loaded");
     setInterval(() => {
-      detect(holistic);
+      detect(net, faceModel, handModel);
     }, 200);
   };
 
@@ -71,7 +82,7 @@ const CameraView = (props) => {
     canvas.fillRect(x, y, 10, 10);
   };
 
-  const detect = async (holistic) => {
+  const detect = async (posenet, facenet, handnet) => {
     if (
       typeof webcamRef.current !== "undefined" &&
       webcamRef.current !== null &&
@@ -87,12 +98,55 @@ const CameraView = (props) => {
       canvasRef.current.width = videoWidth;
       canvasRef.current.height = videoHeight;
 
-      const data = await holistic.send({ image: video });
-      props.mapJoints({
-        data: data,
+      const pose = await posenet.estimatePoses(video);
+      const face = await facenet.estimateFaces({ input: video });
+      const hand = await handnet.estimateHands(video);
+      const poseKeypoints3D = pose[0].keypoints3D;
+      const poseKeypoints2D = pose[0].keypoints;
+      const faceKeypoints3D = face[0].scaledMesh;
+      let rightHandlm, leftHandlm;
+      if (hand[0]) {
+        if (hand[0].handedness === "Right") {
+          rightHandlm = hand[0].keypoints3D;
+        } else {
+          leftHandlm = hand[0].keypoints3D;
+        }
+      }
+      if (hand[1]) {
+        if (hand[1].handedness === "Right") {
+          rightHandlm = hand[1].keypoints3D;
+        } else {
+          leftHandlm = hand[1].keypoints3D;
+        }
+      }
+      for (const e of poseKeypoints2D) {
+        e.x /= videoWidth;
+        e.y /= videoHeight;
+        e.z = 0;
+      }
+      let poseRig = Kalidokit.Pose.solve(poseKeypoints3D, poseKeypoints2D, {
+        runtime: "tfjs",
+        video: video,
       });
-      console.log(data)
+      let faceRig = Kalidokit.Face.solve(faceKeypoints3D, {
+        runtime: "mediapipe",
+        video: video,
+      });
+      let rightHandRig,leftHandRig;
+      if (rightHandlm) {
+        rightHandRig = Kalidokit.Hand.solve(rightHandlm, "Right");
+      }
+      if (leftHandlm) {
+        leftHandRig = Kalidokit.Hand.solve(leftHandlm, "Left");
+      }
+      const data = {
+        pose: poseRig,
+        face: faceRig,
+        hand: { right: rightHandRig, left: leftHandRig },
+      };
+      props.mapJoints(data);
       // drawPose(pose[0], canvasRef.current.getContext("2d"));
+      drawFace(face[0], canvasRef.current.getContext("2d"));
     }
   };
 
